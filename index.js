@@ -17,44 +17,6 @@ const CLOUD_SEC   = process.env.CLOUDINARY_API_SECRET || '';
 const app = express();
 app.use(express.json());
 
-// ── Загрузка медиа в Cloudinary ───────────────────────────────────────────────
-async function uploadToCloudinary(base64Data, mimeType) {
-  if (!CLOUD_NAME || !CLOUD_KEY || !CLOUD_SEC) return null;
-  try {
-    const dataUri = `data:${mimeType};base64,${base64Data}`;
-    const form = new URLSearchParams();
-    form.append('file', dataUri);
-    form.append('upload_preset', 'unsigned_wa'); // fallback
-    form.append('timestamp', Math.floor(Date.now() / 1000));
-
-    // Signed upload
-    const crypto = require('crypto');
-    const timestamp = Math.floor(Date.now() / 1000);
-    const toSign = `timestamp=${timestamp}${CLOUD_SEC}`;
-    const signature = crypto.createHash('sha1').update(toSign).digest('hex');
-
-    const formData = new URLSearchParams();
-    formData.append('file', dataUri);
-    formData.append('timestamp', timestamp);
-    formData.append('api_key', CLOUD_KEY);
-    formData.append('signature', signature);
-    formData.append('folder', 'wa_media');
-
-    const res = await axios.post(
-      `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`,
-      formData.toString(),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }
-    );
-    return res.data.secure_url || null;
-  } catch (e) {
-    console.error('[WA] Cloudinary upload error:', e.message);
-    return null;
-  }
-}
-
-const app = express();
-app.use(express.json());
-
 // ── Состояние клиента ─────────────────────────────────────────────────────────
 let client       = null;
 let qrDataUrl    = null;   // base64 QR PNG
