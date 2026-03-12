@@ -1,12 +1,56 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const express = require('express');
 const qrcode  = require('qrcode');
 const axios   = require('axios');
+const https   = require('https');
 
 const PORT        = process.env.PORT || 3000;
-const MAIN_APP    = process.env.MAIN_APP_URL || '';   // URL основного приложения
+const MAIN_APP    = process.env.MAIN_APP_URL || '';
 const API_SECRET  = process.env.API_SECRET  || 'changeme';
 const WA_SECRET   = process.env.WA_SECRET   || 'changeme';
+
+// Cloudinary
+const CLOUD_NAME  = process.env.CLOUDINARY_CLOUD_NAME || '';
+const CLOUD_KEY   = process.env.CLOUDINARY_API_KEY    || '';
+const CLOUD_SEC   = process.env.CLOUDINARY_API_SECRET || '';
+
+const app = express();
+app.use(express.json());
+
+// ── Загрузка медиа в Cloudinary ───────────────────────────────────────────────
+async function uploadToCloudinary(base64Data, mimeType) {
+  if (!CLOUD_NAME || !CLOUD_KEY || !CLOUD_SEC) return null;
+  try {
+    const dataUri = `data:${mimeType};base64,${base64Data}`;
+    const form = new URLSearchParams();
+    form.append('file', dataUri);
+    form.append('upload_preset', 'unsigned_wa'); // fallback
+    form.append('timestamp', Math.floor(Date.now() / 1000));
+
+    // Signed upload
+    const crypto = require('crypto');
+    const timestamp = Math.floor(Date.now() / 1000);
+    const toSign = `timestamp=${timestamp}${CLOUD_SEC}`;
+    const signature = crypto.createHash('sha1').update(toSign).digest('hex');
+
+    const formData = new URLSearchParams();
+    formData.append('file', dataUri);
+    formData.append('timestamp', timestamp);
+    formData.append('api_key', CLOUD_KEY);
+    formData.append('signature', signature);
+    formData.append('folder', 'wa_media');
+
+    const res = await axios.post(
+      `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`,
+      formData.toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }
+    );
+    return res.data.secure_url || null;
+  } catch (e) {
+    console.error('[WA] Cloudinary upload error:', e.message);
+    return null;
+  }
+}
 
 const app = express();
 app.use(express.json());
@@ -76,7 +120,7 @@ function createClient() {
 
     const chatId   = msg.from;                    // номер@c.us
     const number   = chatId.split('@')[0];
-    const body     = msg.body || '[медиафайл]';
+    let   body     = msg.body || '';
 
     let senderName = number;
     try {
@@ -84,6 +128,56 @@ function createClient() {
       senderName = contact.pushname || contact.name || number;
     } catch (_) {}
 
+    // Обработка медиафайлов (фото, видео, документы)
+    let mediaUrl  = null;
+    let mediaType = null;
+
+    if (msg.hasMedia) {
+      try {
+        const media = await msg.downloadMedia();
+        if (media) {
+          mediaType = media.mimetype || 'image/jpeg';
+          console.log(`[WA] Media received: ${mediaType} from ${number}`);
+
+          // Загружаем в Cloudinary если настроен
+          if (CLOUD_NAME && CLOUD_KEY && CLOUD_SEC) {
+            const isImage = mediaType.startsWith('image/');
+            const uploadType = isImage ? 'image' : 'raw';
+            try {
+              const crypto = require('crypto');
+              const timestamp = Math.floor(Date.now() / 1000);
+              const toSign = `folder=wa_media&timestamp=${timestamp}${CLOUD_SEC}`;
+              const signature = crypto.createHash('sha1').update(toSign).digest('hex');
+
+              const dataUri = `data:${mediaType};base64,${media.data}`;
+              const formData = new URLSearchParams();
+              formData.append('file', dataUri);
+              formData.append('timestamp', timestamp);
+              formData.append('api_key', CLOUD_KEY);
+              formData.append('signature', signature);
+              formData.append('folder', 'wa_media');
+
+              const res = await axios.post(
+                `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${uploadType}/upload`,
+                formData.toString(),
+                { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 20000 }
+              );
+              mediaUrl = res.data.secure_url || null;
+              console.log(`[WA] Uploaded to Cloudinary: ${mediaUrl}`);
+            } catch (e) {
+              console.error('[WA] Cloudinary error:', e.message);
+            }
+          }
+
+          if (!body) body = mediaType.startsWith('image/') ? '[фото]' : '[файл]';
+        }
+      } catch (e) {
+        console.error('[WA] Media download error:', e.message);
+        if (!body) body = '[медиафайл]';
+      }
+    }
+
+    if (!body) body = '[сообщение]';
     console.log(`[WA] MSG from ${number}: ${body.substring(0, 50)}`);
 
     // Отправляем в основное приложение
@@ -92,6 +186,8 @@ function createClient() {
       wa_number:    number,
       sender_name:  senderName,
       body,
+      media_url:    mediaUrl,
+      media_type:   mediaType,
       timestamp:    Math.floor(Date.now() / 1000),
     });
   });
