@@ -302,6 +302,33 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, status: clientStatus });
 });
 
+// Отправка медиафайла (фото)
+app.post('/send_media', auth, async (req, res) => {
+  const { to, data, mimetype, filename, caption } = req.body;
+  if (!to || !data) return res.status(400).json({ error: 'to and data required' });
+  if (!client || clientStatus !== 'ready') {
+    return res.status(503).json({ error: 'WhatsApp not connected' });
+  }
+  try {
+    const { MessageMedia } = require('whatsapp-web.js');
+    const media = new MessageMedia(mimetype || 'image/jpeg', data, filename || 'photo.jpg');
+    const chatId = to.includes('@') ? to : `${to}@c.us`;
+
+    try {
+      const chat = await client.getChatById(chatId);
+      await chat.sendMessage(media, { caption: caption || '' });
+    } catch (_) {
+      await client.sendMessage(chatId, media, { caption: caption || '' });
+    }
+
+    console.log(`[WA] Media sent to ${to} (${mimetype})`);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[WA] send_media error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ── Старт ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`[WA] Service running on port ${PORT}`);
