@@ -183,11 +183,25 @@ app.post('/send', auth, async (req, res) => {
   try {
     // to может быть: "79001234567" или "79001234567@c.us"
     const chatId = to.includes('@') ? to : `${to}@c.us`;
-    await client.sendMessage(chatId, message);
+
+    // Используем getChatById + chat.sendMessage вместо client.sendMessage
+    // Это фикс ошибки "No LID for user" на новых аккаунтах WhatsApp
+    const chat = await client.getChatById(chatId);
+    await chat.sendMessage(message);
+
     res.json({ ok: true });
   } catch (e) {
     console.error('[WA] Send error:', e.message);
-    res.status(500).json({ ok: false, error: e.message });
+
+    // Fallback — пробуем старый способ
+    try {
+      const chatId = to.includes('@') ? to : `${to}@c.us`;
+      await client.sendMessage(chatId, message);
+      res.json({ ok: true });
+    } catch (e2) {
+      console.error('[WA] Send fallback error:', e2.message);
+      res.status(500).json({ ok: false, error: e2.message });
+    }
   }
 });
 
