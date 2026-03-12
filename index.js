@@ -233,6 +233,29 @@ app.get('/status', auth, (req, res) => {
   });
 });
 
+// Информация о контакте (фото, имя, статус)
+app.post('/contact_info', auth, async (req, res) => {
+  const { wa_chat_id } = req.body;
+  if (!client || clientStatus !== 'ready') return res.json({ ok: false, error: 'not_ready' });
+  try {
+    const contact = await client.getContactById(wa_chat_id);
+    let photo_url = null;
+    try {
+      photo_url = await contact.getProfilePicUrl();
+    } catch (_) {}
+    res.json({
+      ok: true,
+      name: contact.pushname || contact.name || null,
+      number: contact.number || null,
+      about: contact.statusMute ? null : null, // WA doesn't expose bio via API
+      is_business: contact.isBusiness || false,
+      photo_url: photo_url || null,
+    });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 // QR код
 app.get('/qr', auth, (req, res) => {
   if (!qrDataUrl) return res.json({ qr: null, status: clientStatus });
