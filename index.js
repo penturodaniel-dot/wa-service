@@ -118,26 +118,50 @@ function createClient() {
             try {
               const crypto = require('crypto');
               const timestamp = Math.floor(Date.now() / 1000);
+
+              // Подпись: параметры строго в алфавитном порядке + secret в конце
               const toSign = `folder=wa_media&timestamp=${timestamp}${CLOUD_SEC}`;
               const signature = crypto.createHash('sha1').update(toSign).digest('hex');
 
-              const dataUri = `data:${mediaType};base64,${media.data}`;
-              const formData = new URLSearchParams();
-              formData.append('file', dataUri);
-              formData.append('timestamp', timestamp);
-              formData.append('api_key', CLOUD_KEY);
-              formData.append('signature', signature);
-              formData.append('folder', 'wa_media');
+              // Граница для multipart
+              const boundary = '----WA' + Date.now();
+              const CRLF = '\r\n';
+
+              const addField = (name, value) =>
+                `--${boundary}${CRLF}Content-Disposition: form-data; name="${name}"${CRLF}${CRLF}${value}${CRLF}`;
+
+              let body = '';
+              body += addField('timestamp', String(timestamp));
+              body += addField('api_key', CLOUD_KEY);
+              body += addField('signature', signature);
+              body += addField('folder', 'wa_media');
+
+              // Добавляем файл
+              const ext = mediaType.split('/')[1] || 'jpg';
+              const imgBuffer = Buffer.from(media.data, 'base64');
+              const fileHeader = `--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="wa.${ext}"${CRLF}Content-Type: ${mediaType}${CRLF}${CRLF}`;
+              const fileFooter = `${CRLF}--${boundary}--${CRLF}`;
+
+              const bodyBuffer = Buffer.concat([
+                Buffer.from(body),
+                Buffer.from(fileHeader),
+                imgBuffer,
+                Buffer.from(fileFooter),
+              ]);
 
               const res = await axios.post(
                 `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${uploadType}/upload`,
-                formData.toString(),
-                { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 20000 }
+                bodyBuffer,
+                {
+                  headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': bodyBuffer.length },
+                  timeout: 25000,
+                  maxContentLength: 20 * 1024 * 1024,
+                }
               );
               mediaUrl = res.data.secure_url || null;
               console.log(`[WA] Uploaded to Cloudinary: ${mediaUrl}`);
             } catch (e) {
-              console.error('[WA] Cloudinary error:', e.message);
+              console.error('[WA] Cloudinary error:', e.response?.data ? JSON.stringify(e.response.data) : e.message);
             }
           }
 
