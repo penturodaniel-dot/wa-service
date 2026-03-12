@@ -29,6 +29,16 @@ function createClient() {
   clientStatus = 'connecting';
   qrDataUrl    = null;
 
+  // Удаляем lock-файлы Chromium — иначе после рестарта контейнера
+  // браузер думает что уже запущен на другом компьютере
+  const fs = require('fs');
+  const lockFiles = [
+    '/app/.wwebjs_auth/session/SingletonLock',
+    '/app/.wwebjs_auth/session/SingletonCookie',
+    '/app/.wwebjs_auth/session/SingletonSocket',
+  ];
+  lockFiles.forEach(f => { try { fs.unlinkSync(f); console.log('[WA] Removed lock:', f); } catch (_) {} });
+
   const c = new Client({
     authStrategy: new LocalAuth({ dataPath: '/app/.wwebjs_auth' }),
     puppeteer: {
@@ -271,8 +281,19 @@ app.get('/health', (req, res) => {
 // ── Старт ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`[WA] Service running on port ${PORT}`);
+
+  // Удаляем lock-файлы Chromium — иначе после рестарта контейнера
+  // Chromium думает что уже запущен и падает с "profile in use"
+  const fs = require('fs');
+  const lockFiles = [
+    '/app/.wwebjs_auth/session/SingletonLock',
+    '/app/.wwebjs_auth/session/SingletonSocket',
+    '/app/.wwebjs_auth/session/SingletonCookie',
+    '/app/.wwebjs_auth/session/Default/SingletonLock',
+  ];
+  lockFiles.forEach(f => { try { fs.unlinkSync(f); console.log(`[WA] Removed lock: ${f}`); } catch(_) {} });
+
   // Автозапуск при наличии сохранённой сессии
-  const fs   = require('fs');
   const auth = '/app/.wwebjs_auth';
   const hasSavedSession = fs.existsSync(auth) && fs.readdirSync(auth).length > 0;
   if (hasSavedSession) {
