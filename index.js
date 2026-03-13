@@ -19,6 +19,7 @@ let clientInfo   = null;
 
 // ── Создание клиента ──────────────────────────────────────────────────────────
 function createClient() {
+  clearLocks();
   console.log('[WA] Creating client...');
   clientStatus = 'connecting';
   qrDataUrl    = null;
@@ -118,6 +119,26 @@ function clearSession() {
   const path = '/app/.wwebjs_auth';
   try { fs.rmSync(path, { recursive: true, force: true }); } catch (_) {}
   // НЕ создаём папку обратно — чтобы автозапуск не принял пустую папку за сессию
+}
+
+// Удаляет lock-файлы Chromium, которые остаются после краша контейнера
+function clearLocks() {
+  const fs   = require('fs');
+  const path = require('path');
+  const base = '/app/.wwebjs_auth';
+  const lockNames = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile'];
+  function removeLocks(dir) {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        removeLocks(full);
+      } else if (lockNames.includes(entry.name) || entry.name.endsWith('.lock')) {
+        try { fs.unlinkSync(full); console.log('[WA] Removed lock: ' + full); } catch (_) {}
+      }
+    }
+  }
+  removeLocks(base);
 }
 
 // ── AUTH middleware ───────────────────────────────────────────────────────────
