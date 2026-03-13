@@ -1,18 +1,12 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const express = require('express');
 const qrcode  = require('qrcode');
 const axios   = require('axios');
-const https   = require('https');
 
 const PORT        = process.env.PORT || 3000;
-const MAIN_APP    = process.env.MAIN_APP_URL || '';
+const MAIN_APP    = process.env.MAIN_APP_URL || '';   // URL основного приложения
 const API_SECRET  = process.env.API_SECRET  || 'changeme';
 const WA_SECRET   = process.env.WA_SECRET   || 'changeme';
-
-// Cloudinary
-const CLOUD_NAME  = process.env.CLOUDINARY_CLOUD_NAME || '';
-const CLOUD_KEY   = process.env.CLOUDINARY_API_KEY    || '';
-const CLOUD_SEC   = process.env.CLOUDINARY_API_SECRET || '';
 
 const app = express();
 app.use(express.json());
@@ -28,16 +22,6 @@ function createClient() {
   console.log('[WA] Creating client...');
   clientStatus = 'connecting';
   qrDataUrl    = null;
-
-  // Удаляем lock-файлы Chromium — иначе после рестарта контейнера
-  // браузер думает что уже запущен на другом компьютере
-  const fs = require('fs');
-  const lockFiles = [
-    '/app/.wwebjs_auth/session/SingletonLock',
-    '/app/.wwebjs_auth/session/SingletonCookie',
-    '/app/.wwebjs_auth/session/SingletonSocket',
-  ];
-  lockFiles.forEach(f => { try { fs.unlinkSync(f); console.log('[WA] Removed lock:', f); } catch (_) {} });
 
   const c = new Client({
     authStrategy: new LocalAuth({ dataPath: '/app/.wwebjs_auth' }),
@@ -92,7 +76,7 @@ function createClient() {
 
     const chatId   = msg.from;                    // номер@c.us
     const number   = chatId.split('@')[0];
-    let   body     = msg.body || '';
+    const body     = msg.body || '[медиафайл]';
 
     let senderName = number;
     try {
@@ -100,80 +84,6 @@ function createClient() {
       senderName = contact.pushname || contact.name || number;
     } catch (_) {}
 
-    // Обработка медиафайлов (фото, видео, документы)
-    let mediaUrl  = null;
-    let mediaType = null;
-
-    if (msg.hasMedia) {
-      try {
-        const media = await msg.downloadMedia();
-        if (media) {
-          mediaType = media.mimetype || 'image/jpeg';
-          console.log(`[WA] Media received: ${mediaType} from ${number}`);
-
-          // Загружаем в Cloudinary если настроен
-          if (CLOUD_NAME && CLOUD_KEY && CLOUD_SEC) {
-            const isImage = mediaType.startsWith('image/');
-            const uploadType = isImage ? 'image' : 'raw';
-            try {
-              const crypto = require('crypto');
-              const timestamp = Math.floor(Date.now() / 1000);
-
-              // Подпись: параметры строго в алфавитном порядке + secret в конце
-              const toSign = `folder=wa_media&timestamp=${timestamp}${CLOUD_SEC}`;
-              const signature = crypto.createHash('sha1').update(toSign).digest('hex');
-
-              // Граница для multipart
-              const boundary = '----WA' + Date.now();
-              const CRLF = '\r\n';
-
-              const addField = (name, value) =>
-                `--${boundary}${CRLF}Content-Disposition: form-data; name="${name}"${CRLF}${CRLF}${value}${CRLF}`;
-
-              let body = '';
-              body += addField('timestamp', String(timestamp));
-              body += addField('api_key', CLOUD_KEY);
-              body += addField('signature', signature);
-              body += addField('folder', 'wa_media');
-
-              // Добавляем файл
-              const ext = mediaType.split('/')[1] || 'jpg';
-              const imgBuffer = Buffer.from(media.data, 'base64');
-              const fileHeader = `--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="wa.${ext}"${CRLF}Content-Type: ${mediaType}${CRLF}${CRLF}`;
-              const fileFooter = `${CRLF}--${boundary}--${CRLF}`;
-
-              const bodyBuffer = Buffer.concat([
-                Buffer.from(body),
-                Buffer.from(fileHeader),
-                imgBuffer,
-                Buffer.from(fileFooter),
-              ]);
-
-              const res = await axios.post(
-                `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${uploadType}/upload`,
-                bodyBuffer,
-                {
-                  headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': bodyBuffer.length },
-                  timeout: 25000,
-                  maxContentLength: 20 * 1024 * 1024,
-                }
-              );
-              mediaUrl = res.data.secure_url || null;
-              console.log(`[WA] Uploaded to Cloudinary: ${mediaUrl}`);
-            } catch (e) {
-              console.error('[WA] Cloudinary error:', e.response?.data ? JSON.stringify(e.response.data) : e.message);
-            }
-          }
-
-          if (!body) body = mediaType.startsWith('image/') ? '[фото]' : '[файл]';
-        }
-      } catch (e) {
-        console.error('[WA] Media download error:', e.message);
-        if (!body) body = '[медиафайл]';
-      }
-    }
-
-    if (!body) body = '[сообщение]';
     console.log(`[WA] MSG from ${number}: ${body.substring(0, 50)}`);
 
     // Отправляем в основное приложение
@@ -182,8 +92,6 @@ function createClient() {
       wa_number:    number,
       sender_name:  senderName,
       body,
-      media_url:    mediaUrl,
-      media_type:   mediaType,
       timestamp:    Math.floor(Date.now() / 1000),
     });
   });
@@ -208,8 +116,8 @@ async function notifyMain(event, data) {
 function clearSession() {
   const fs   = require('fs');
   const path = '/app/.wwebjs_auth';
-  try { fs.rmSync(path, { recursive: true }); } catch (_) {}
-  try { fs.mkdirSync(path); } catch (_) {}
+  try { fs.rmSync(path, { recursive: true, force: true }); } catch (_) {}
+  // НЕ создаём папку обратно — чтобы автозапуск не принял пустую папку за сессию
 }
 
 // ── AUTH middleware ───────────────────────────────────────────────────────────
@@ -231,29 +139,6 @@ app.get('/status', auth, (req, res) => {
     name:       clientInfo?.pushname  || null,
     has_qr:     !!qrDataUrl,
   });
-});
-
-// Информация о контакте (фото, имя, статус)
-app.post('/contact_info', auth, async (req, res) => {
-  const { wa_chat_id } = req.body;
-  if (!client || clientStatus !== 'ready') return res.json({ ok: false, error: 'not_ready' });
-  try {
-    const contact = await client.getContactById(wa_chat_id);
-    let photo_url = null;
-    try {
-      photo_url = await contact.getProfilePicUrl();
-    } catch (_) {}
-    res.json({
-      ok: true,
-      name: contact.pushname || contact.name || null,
-      number: contact.number || null,
-      about: contact.statusMute ? null : null, // WA doesn't expose bio via API
-      is_business: contact.isBusiness || false,
-      photo_url: photo_url || null,
-    });
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
 });
 
 // QR код
@@ -298,25 +183,11 @@ app.post('/send', auth, async (req, res) => {
   try {
     // to может быть: "79001234567" или "79001234567@c.us"
     const chatId = to.includes('@') ? to : `${to}@c.us`;
-
-    // Используем getChatById + chat.sendMessage вместо client.sendMessage
-    // Это фикс ошибки "No LID for user" на новых аккаунтах WhatsApp
-    const chat = await client.getChatById(chatId);
-    await chat.sendMessage(message);
-
+    await client.sendMessage(chatId, message);
     res.json({ ok: true });
   } catch (e) {
     console.error('[WA] Send error:', e.message);
-
-    // Fallback — пробуем старый способ
-    try {
-      const chatId = to.includes('@') ? to : `${to}@c.us`;
-      await client.sendMessage(chatId, message);
-      res.json({ ok: true });
-    } catch (e2) {
-      console.error('[WA] Send fallback error:', e2.message);
-      res.status(500).json({ ok: false, error: e2.message });
-    }
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -325,51 +196,15 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, status: clientStatus });
 });
 
-// Отправка медиафайла (фото)
-app.post('/send_media', auth, async (req, res) => {
-  const { to, data, mimetype, filename, caption } = req.body;
-  if (!to || !data) return res.status(400).json({ error: 'to and data required' });
-  if (!client || clientStatus !== 'ready') {
-    return res.status(503).json({ error: 'WhatsApp not connected' });
-  }
-  try {
-    const { MessageMedia } = require('whatsapp-web.js');
-    const media = new MessageMedia(mimetype || 'image/jpeg', data, filename || 'photo.jpg');
-    const chatId = to.includes('@') ? to : `${to}@c.us`;
-
-    try {
-      const chat = await client.getChatById(chatId);
-      await chat.sendMessage(media, { caption: caption || '' });
-    } catch (_) {
-      await client.sendMessage(chatId, media, { caption: caption || '' });
-    }
-
-    console.log(`[WA] Media sent to ${to} (${mimetype})`);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[WA] send_media error:', e.message);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
 // ── Старт ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`[WA] Service running on port ${PORT}`);
-
-  // Удаляем lock-файлы Chromium — иначе после рестарта контейнера
-  // Chromium думает что уже запущен и падает с "profile in use"
-  const fs = require('fs');
-  const lockFiles = [
-    '/app/.wwebjs_auth/session/SingletonLock',
-    '/app/.wwebjs_auth/session/SingletonSocket',
-    '/app/.wwebjs_auth/session/SingletonCookie',
-    '/app/.wwebjs_auth/session/Default/SingletonLock',
-  ];
-  lockFiles.forEach(f => { try { fs.unlinkSync(f); console.log(`[WA] Removed lock: ${f}`); } catch(_) {} });
-
-  // Автозапуск при наличии сохранённой сессии
+  // Автозапуск только если есть реальные данные сессии (папка session внутри)
+  const fs   = require('fs');
+  const path = require('path');
   const auth = '/app/.wwebjs_auth';
-  const hasSavedSession = fs.existsSync(auth) && fs.readdirSync(auth).length > 0;
+  const sessionDir = path.join(auth, 'session');
+  const hasSavedSession = fs.existsSync(sessionDir) && fs.readdirSync(sessionDir).length > 0;
   if (hasSavedSession) {
     console.log('[WA] Found saved session — auto-connecting...');
     client = createClient();
