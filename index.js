@@ -9,7 +9,7 @@ const API_SECRET  = process.env.API_SECRET  || 'changeme';
 const WA_SECRET   = process.env.WA_SECRET   || 'changeme';
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));
 
 // ── Состояние клиента ─────────────────────────────────────────────────────────
 let client       = null;
@@ -228,6 +228,27 @@ app.post('/send', auth, async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     console.error('[WA] Send error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Отправить медиафайл (base64)
+app.post('/send_media', auth, async (req, res) => {
+  const { to, base64, mimetype, filename, caption } = req.body;
+  if (!to || !base64 || !mimetype) {
+    return res.status(400).json({ error: 'to, base64 and mimetype required' });
+  }
+  if (!client || clientStatus !== 'ready') {
+    return res.status(503).json({ error: 'WhatsApp not connected' });
+  }
+  try {
+    const { MessageMedia } = require('whatsapp-web.js');
+    const chatId = to.includes('@') ? to : `${to}@c.us`;
+    const media  = new MessageMedia(mimetype, base64, filename || 'file');
+    await client.sendMessage(chatId, media, { caption: caption || '' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[WA] Send media error:', e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
