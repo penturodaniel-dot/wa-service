@@ -253,6 +253,32 @@ app.post('/send_media', auth, async (req, res) => {
   }
 });
 
+// Получить профиль контакта
+app.post('/contact_info', auth, async (req, res) => {
+  const { wa_chat_id } = req.body;
+  if (!wa_chat_id) return res.status(400).json({ error: 'wa_chat_id required' });
+  if (!client || clientStatus !== 'ready') {
+    return res.status(503).json({ error: 'WhatsApp not connected' });
+  }
+  try {
+    const chatId = wa_chat_id.includes('@') ? wa_chat_id : `${wa_chat_id}@c.us`;
+    const contact = await client.getContactById(chatId);
+    let photo_url = null;
+    try {
+      photo_url = await contact.getProfilePicUrl();
+    } catch (_) {}
+    res.json({
+      ok: true,
+      name:      contact.pushname || contact.name || null,
+      about:     contact.about   || null,
+      photo_url: photo_url       || null,
+    });
+  } catch (e) {
+    console.error('[WA] contact_info error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ ok: true, status: clientStatus });
