@@ -77,7 +77,7 @@ function createClient() {
 
     const chatId   = msg.from;                    // номер@c.us
     const number   = chatId.split('@')[0];
-    const body     = msg.body || '[медиафайл]';
+    const body     = msg.body || '';
 
     let senderName = number;
     try {
@@ -85,14 +85,34 @@ function createClient() {
       senderName = contact.pushname || contact.name || number;
     } catch (_) {}
 
-    console.log(`[WA] MSG from ${number}: ${body.substring(0, 50)}`);
+    // ── Медиафайлы ────────────────────────────────────────────────────────────
+    let mediaBase64 = null;
+    let mediaMime   = null;
+    if (msg.hasMedia) {
+      try {
+        const media = await msg.downloadMedia();
+        if (media) {
+          mediaBase64 = media.data;        // base64 строка
+          mediaMime   = media.mimetype;    // image/jpeg, video/mp4, etc.
+          console.log(`[WA] Media from ${number}: ${mediaMime}`);
+        }
+      } catch (e) {
+        console.error('[WA] Media download error:', e.message);
+      }
+    }
+
+    const displayBody = body || (msg.hasMedia ? '[медиафайл]' : '');
+    console.log(`[WA] MSG from ${number}: ${displayBody.substring(0, 50)}`);
 
     // Отправляем в основное приложение
     await notifyMain('message', {
       wa_chat_id:   chatId,
       wa_number:    number,
       sender_name:  senderName,
-      body,
+      body:         displayBody,
+      hasMedia:     msg.hasMedia,
+      media_base64: mediaBase64,
+      media_type:   mediaMime,
       timestamp:    Math.floor(Date.now() / 1000),
     });
   });
